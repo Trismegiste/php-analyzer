@@ -136,21 +136,20 @@ class FileCollection implements \IteratorAggregate, \Countable
         $prefixLength = strlen($basePath);
         $col = new self();
 
-        $i = 0;
-        $memoryThreshold = self::getMemoryThreshold();
+        ob_end_clean();
+
+        $threads = array();
         foreach ($traversable as $file) {
-            assert($file instanceof SplFileInfo);
-            $col->add(File::create(substr($file->getRealPath(), $prefixLength), $file->getContents()));
+            /** @var $file SplFileInfo */
 
-            if ($i % 50 === 0 && $memoryThreshold < $memoryUsage = memory_get_usage()) {
-                throw MaxMemoryExceededException::create($memoryUsage, $memoryThreshold);
-            }
-
-            $i += 1;
+            $threads[] = Async::call(
+                array('Scrutinizer\PhpAnalyzer\Model\File', 'create'),
+                array(substr($file->getRealPath(), $prefixLength), $file->getContents())
+            );
         }
 
-        if ($memoryThreshold < $memoryUsage = memory_get_usage()) {
-            throw MaxMemoryExceededException::create($memoryUsage, $memoryThreshold);
+        foreach ($threads as $thread) {
+            var_dump($thread->getResult());
         }
 
         return $col;
@@ -282,6 +281,49 @@ class FileCollection implements \IteratorAggregate, \Countable
         }
 
         return new FileCollection($filteredFiles);
+    }
+}
+
+class Async extends \Thread {
+    /**
+     * Provide a passthrough to call_user_func_array
+     **/
+    public function __construct($method, $params){
+        $this->method = $method;
+        $this->params = $params;
+        $this->result = null;
+        $this->joined = false;
+    }
+
+    /**
+     * The smallest thread in the world
+     **/
+    public function run(){
+        if (($this->result=call_user_func_array($this->method, $this->params))) {
+            return true;
+        } else return false;
+    }
+
+    /**
+     * Static method to create your threads from functions ...
+     **/
+    public static function call($method, $params){
+        $thread = new Async($method, $params);
+        if($thread->start()){
+            return $thread;
+        } /** else throw Nastyness **/
+    }
+
+    /**
+     * Do whatever, result stored in $this->result, don't try to join twice
+     **/
+    public function getResult(){
+        if(!$this->joined) {
+            $this->joined = true;
+            $this->join();
+        }
+
+        return $this->result;
     }
 }
 
